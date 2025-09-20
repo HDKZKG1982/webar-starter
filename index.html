@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>WebAR Starter (MindAR + Three.js)</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff; font-family: system-ui, -apple-system, sans-serif; }
+    #ui { position: fixed; top: 12px; left: 12px; right: 12px; z-index: 10; display:flex; gap:8px; align-items:center; }
+    #title { padding:6px 10px; background:rgba(0,0,0,0.5); border-radius:8px; }
+    #controls { margin-left:auto; display:flex; gap:8px; }
+    button, input[type=file] { padding:8px 12px; border-radius:8px; border:none; background:#1f6feb; color:#fff; }
+    button.secondary { background:#444; }
+    #hint { position: fixed; bottom: 12px; left: 12px; right: 12px; padding:10px; background:rgba(0,0,0,0.4); border-radius:8px; font-size:14px; }
+    #preview { position: fixed; bottom: 12px; right: 12px; width: 120px; height: 120px; object-fit: cover; border:2px solid #fff; display:none; }
+    a { color:#8ab4ff; }
+    .hidden { display:none; }
+  </style>
+
+  <!-- Three.js + MindAR (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
+</head>
+<body>
+  <div id="ui">
+    <div id="title">Loading…</div>
+    <div id="controls">
+      <input type="file" id="imgPicker" accept="image/*" title="Choose an image to overlay" />
+      <button id="captureBtn">📸 写真を保存</button>
+      <button id="switchBtn" class="secondary">🔄 カメラ切替</button>
+    </div>
+  </div>
+  <div id="hint">
+    印刷した <b>ターゲット画像</b>（assets/sample-target.jpg）をカメラに写すとARが出現します。最初はサンプルのオーバーレイが表示されます。<br />
+    イベント名やロゴは <code>assets/events.json</code>、画像はURLの <code>?img=...</code> または右上のファイル選択で変更できます。
+  </div>
+  <img id="preview" alt="snapshot preview" />
+
+  <script>
+    // --- Utilities ---
+    function getQuery() {
+      const p = new URLSearchParams(location.search);
+      return Object.fromEntries(p.entries());
+    }
+
+    async function loadJSON(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Failed to load '+url);
+      return await r.json();
+    }
+
+    // --- Main ---
+    (async () => {
+      const params = getQuery(); // ?event=seabass2025&img=https://...
+
+      // Load events config
+      let events;
+      try {
+        events = await loadJSON('assets/events.json');
+      } catch(e) {
+        events = { default: { title: 'EVENT TITLE', logo: 'assets/logo.png' } };
+      }
+      const evKey = params.event && events[params.event] ? params.event : 'default';
+      const ev = events[evKey];
+
+      const titleEl = document.getElementById('title');
+      titleEl.textContent = ev.title;
+
+      // Create MindAR + Three scene
+      const mindarThree = new window.MINDAR.IMAGE.MindARThree({
+        container: document.body,
+        imageTargetSrc: "assets/targets.mind",
+        filterMinCF: 0.0001,
+        uiScanning: true,
+        uiLoading: "no",
+      });
+      const {renderer, scene, camera} = mindarThree;
+
+      // Root anchor (when the target is found)
+      const anchor = mindarThree.addAnchor(0);
+
+      // 3D content group
+      const group = new THREE.Group();
+      anchor.group.add(group);
+
+      // Plane for user-selected image (or param)
+      const planeGeo = new THREE.PlaneGeometry(1.2, 0.7);
+      const loader = new THREE.TextureLoader();
+      const placeHolderTex = loader.load('assets/sample-overlay.png');
+      placeHolderTex.colorSpace = THREE.SRGBColorSpace;
+      const planeMat = new THREE.MeshBasicMaterial({map: placeHolderTex, transparent:true});
+      const plane = new THREE.Mesh(planeGeo, planeMat);
+      plane.position.set(0, 0.0, 0);
+      group.add(plane);
+
+      // Title sprite (event name)
+      const makeTextTexture = (text) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024; canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 80px system-ui, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, canvas.width/2, canvas.height/2);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      };
+      const titleTex = makeTextTexture(ev.title);
+      const titleMat = new THREE.SpriteMaterial({map: titleTex});
+      const titleSprite = new THREE.Sprite(titleMat);
+      titleSprite.scale.set(1.2, 0.3, 1);
+      titleSprite.position.set(0, 0.55, 0);
+      group.add(titleSprite);
+
+      // Optional logo sprite
+      const logoTex = loader.load(ev.logo);
+      logoTex.colorSpace = THREE.SRGBColorSpace;
+      const logoMat = new THREE.SpriteMaterial({map: logoTex});
+      const logoSprite = new THREE.Sprite(logoMat);
+      logoSprite.scale.set(0.3, 0.3, 1);
+      logoSprite.position.set(-0.7, 0.55, 0);
+      group.add(logoSprite);
+
+      // Update plane texture from ?img= or file input
+      const setPlaneFromURL = (url) => {
+        loader.load(url, (tex)=>{
+          tex.colorSpace = THREE.SRGBColorSpace;
+          plane.material.map = tex;
+          plane.material.needsUpdate = true;
+        }, undefined, (e)=>{
+          console.warn('Failed loading image:', e);
+          alert('画像の読み込みに失敗しました。CORSの制限やURLの有効性を確認してください。');
+        });
+      };
+      if (params.img) setPlaneFromURL(params.img);
+
+      const fileInput = document.getElementById('imgPicker');
+      fileInput.addEventListener('change', ()=>{
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e)=> setPlaneFromURL(e.target.result);
+        reader.readAsDataURL(file);
+      });
+
+      // Camera switch
+      const switchBtn = document.getElementById('switchBtn');
+      switchBtn.addEventListener('click', async ()=>{
+        try {
+          await mindarThree.stop();
+          mindarThree.videoDevice = (mindarThree.videoDevice === 'environment') ? 'user' : 'environment';
+          await mindarThree.start();
+        } catch(e) {
+          console.warn('Camera switch not supported on this device/browser.');
+        }
+      });
+
+      // Snapshot
+      const captureBtn = document.getElementById('captureBtn');
+      const previewEl = document.getElementById('preview');
+      captureBtn.addEventListener('click', ()=>{
+        renderer.preserveDrawingBuffer = true;
+        renderer.render(scene, camera);
+        const dataURL = renderer.domElement.toDataURL('image/png');
+        renderer.preserveDrawingBuffer = false;
+        const a = document.createElement('a');
+        a.href = dataURL; a.download = 'webar-photo.png'; a.click();
+        previewEl.src = dataURL; previewEl.style.display = 'block';
+      });
+
+      // Start AR
+      try {
+        await mindarThree.start();
+      } catch(e) {
+        alert('カメラへのアクセスに失敗しました。HTTPSで公開されているか、ブラウザの権限設定をご確認ください。');
+        throw e;
+      }
+      renderer.setAnimationLoop(()=>{
+        renderer.render(scene, camera);
+      });
+    })();
+  </script>
+</body>
+</html>
