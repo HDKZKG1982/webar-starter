@@ -1,0 +1,14 @@
+{
+  "default": {
+    "title": "EVENT TITLE",
+    "logo": "assets/logo.png"
+  },
+  "seabass2025": {
+    "title": "シーバスフェスタ 2025",
+    "logo": "assets/logo.png"
+  },
+  "elements": {
+    "title": "ELEMENTS POP-UP",
+    "logo": "assets/logo.png"
+  }
+}
